@@ -1,0 +1,5 @@
+Subject Seed is: 223
+**Subject  : The best accuracy is: 0.5384615384615384
+Subject  : The average accuracy is: 0.3899999999999995
+**The average Best accuracy is: 0.5384615384615384
+The average Aver accuracy is: 0.3899999999999995

@@ -25,6 +25,8 @@ from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange, Reduce
 from common_spatial_pattern import csp  # 导入CSP空间滤波器实现
 from npy_folder_loader import loadnpyfolder
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # 设置CUDA环境变量
 gpus = [0]
@@ -231,7 +233,7 @@ class Trans():
         super(Trans, self).__init__()
         # 训练参数
         self.batch_size = 50
-        self.n_epochs = 60
+        self.n_epochs = 100
         self.img_height = 8  # EEG通道数 (修改为8)
         self.img_width = 1992  # 时间点数量 (修改为1992)
         self.channels = 1
@@ -261,7 +263,7 @@ class Trans():
         self.centers = {}
 
         # 创建日志文件
-        self.log_write = open(f"./results/log_unified.txt", "w")
+        self.log_write = open(f"./results/log_unified_{timestamp}.txt", "w")
         print(f"初始化统一模型，支持5类分类")
 
     def get_source_data(self):
@@ -383,8 +385,9 @@ class Trans():
                     bestAcc = acc
                     Y_true = test_label
                     Y_pred = y_pred
-
-        torch.save(self.model.module.state_dict(), 'model.pth')
+            if(acc > 0.6):
+                break
+        torch.save(self.model.module.state_dict(), f'model_{timestamp}_{bestAcc}_{averAcc}.pth')
         averAcc = averAcc / num
         print('The average accuracy is:', averAcc)
         print('The best accuracy is:', bestAcc)
@@ -397,7 +400,7 @@ class Trans():
 def main():
     best = 0
     aver = 0
-    result_write = open("./results/sub_result.txt", "w")
+    result_write = open(f"./results/sub_result_{timestamp}.txt", "w")
 
     seed_n = np.random.randint(500)
     print('seed is ' + str(seed_n))
