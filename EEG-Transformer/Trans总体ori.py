@@ -10,7 +10,6 @@ import math
 import random
 import time
 import glob
-import copy
 
 from torch.utils.data import DataLoader, Dataset
 from torch.autograd import Variable
@@ -160,7 +159,7 @@ class ViT(nn.Sequential):
                 nn.Sequential(
                     nn.LayerNorm(1992),
                     channel_attention(),
-                    nn.Dropout(0.7),
+                    nn.Dropout(0.5),
                 )
             ),
 
@@ -230,17 +229,16 @@ class channel_attention(nn.Module):
 
 class Trans():
     """Transformer模型训练框架 - 修改为处理npy文件，支持5类"""
-    def __init__(self, pretrained_path=None):
+    def __init__(self):
         super(Trans, self).__init__()
         # 训练参数
         self.batch_size = 50
-        self.n_epochs = 1000
+        self.n_epochs = 100
         self.img_height = 8  # EEG通道数 (修改为8)
         self.img_width = 1992  # 时间点数量 (修改为1992)
         self.channels = 1
         self.c_dim = 5  # 分类类别数 - 5类
-        self.lr = 0.00005  # 学习率
-        self.weight_decay = 1e-4  # 添加权重衰减
+        self.lr = 0.0002  # 学习率
         self.b1 = 0.5  # Adam参数
         self.b2 = 0.9
         #self.nSub = nsub  # 受试者编号
@@ -263,18 +261,6 @@ class Trans():
         summary(self.model, (1, 25, 1992))  # 打印模型结构 (修改为8通道1992采样点)
 
         self.centers = {}
-
-        if pretrained_path:
-            print(f"Loading pretrained model from {pretrained_path}")
-            pretrained_dict = torch.load(pretrained_path)
-            model_dict = self.model.state_dict()
-
-            # 只加载匹配的层参数
-            pretrained_dict = {k: v for k, v in pretrained_dict.items()
-                               if k in model_dict and "clshead" not in k}
-            model_dict.update(pretrained_dict)
-            self.model.load_state_dict(model_dict)
-
 
         # 创建日志文件
         self.log_write = open(f"./results/log_unified_{timestamp}.txt", "w")
@@ -308,6 +294,7 @@ class Trans():
         # standardize
         target_mean = np.mean(self.allData)
         target_std = np.std(self.allData)
+
         self.allData = (self.allData - target_mean) / target_std
         self.testData = (self.testData - target_mean) / target_std
 
@@ -315,7 +302,7 @@ class Trans():
         Wb = csp(tmp_alldata, self.allLabel-1)  # common spatial pattern
         self.allData = np.einsum('abcd, ce -> abed', self.allData, Wb)
         self.testData = np.einsum('abcd, ce -> abed', self.testData, Wb)
-        return self.allData, self.allLabel, self.testData, self.testLabel, target_mean, target_std, Wb
+        return self.allData, self.allLabel, self.testData, self.testLabel
 
     def update_lr(self, optimizer, lr):
         for param_group in optimizer.param_groups:
@@ -328,63 +315,27 @@ class Trans():
         aug_label = []
         return aug_data, aug_label
 
-    def save_model(self, best_model_state, bestAcc, target_mean, target_std, Wb):
-        """保存模型和预处理参数"""
-        # 创建格式为 时间戳_准确率 的文件夹
-        folder_name = f"{timestamp}_{bestAcc:.4f}"
-        model_dir = os.path.join('./', folder_name)
-        os.makedirs(model_dir, exist_ok=True)
-
-        # 保存模型参数
-        model_path = os.path.join(model_dir, "model.pth")
-        torch.save(best_model_state, model_path)
-
-        # 保存预处理参数为NPZ文件
-        preprocess_path = os.path.join(model_dir, "preprocess_params.npz")
-        np.savez(preprocess_path,
-                 target_mean=target_mean,
-                 target_std=target_std,
-                 Wb=Wb)
-
-        print(f"模型和参数已保存至: {model_dir}")
-
-    def augment_data(self, x):
-        """EEG数据增强方法"""
-        # 添加高斯噪声
-        noise = torch.randn_like(x) * random.uniform(0.01, 0.05)
-        x_noised = x + noise
-
-        # 随机时间偏移
-        shift = random.randint(-10, 10)
-        if shift > 0:
-            x_shifted = torch.cat([x[..., shift:], x[..., :shift]], dim=-1)
-        else:
-            x_shifted = x
-
-        # 随机通道置零（模拟电极接触不良）
-        zero_mask = torch.ones_like(x)
-        channels_to_zero = random.sample(range(self.img_height), k=random.randint(1, 2))
-        zero_mask[:, :, channels_to_zero, :] = 0
-
-        return x_noised * zero_mask, x_shifted * zero_mask
-
     def train(self):
 
 
-        img, label, test_data, test_label, target_mean, target_std, Wb = self.get_source_data()
+        img, label, test_data, test_label = self.get_source_data()
         img = torch.from_numpy(img)
         label = torch.from_numpy(label - 1)
 
 
+        dataset = torch.utils.data.TensorDataset(img, label)
+        self.dataloader = torch.utils.data.DataLoader(dataset=dataset, batch_size=self.batch_size, shuffle=True)
 
         test_data = torch.from_numpy(test_data)
         test_label = torch.from_numpy(test_label - 1)
+        test_dataset = torch.utils.data.TensorDataset(test_data, test_label)
+        self.test_dataloader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=self.batch_size, shuffle=True)
+
+        # Optimizers
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, betas=(self.b1, self.b2))
 
         test_data = Variable(test_data.type(self.Tensor))
         test_label = Variable(test_label.type(self.LongTensor))
-
-        test_dataset = torch.utils.data.TensorDataset(test_data, test_label)
-        self.test_dataloader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=self.batch_size, shuffle=True)
 
         bestAcc = 0
         averAcc = 0
@@ -392,55 +343,26 @@ class Trans():
         Y_true = torch.tensor([], dtype=torch.long).cuda()
         Y_pred = torch.tensor([], dtype=torch.long).cuda()
 
-
-        # 添加最佳模型状态跟踪
-        best_model_state = None
-        best_val_loss = float('inf')
-        patience, patience_counter = 10, 0  # 早停机制
-
-        dataset = torch.utils.data.TensorDataset(img, label)
-        self.dataloader = torch.utils.data.DataLoader(dataset=dataset, batch_size=self.batch_size, shuffle=True)
-
-        # Optimizers
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=self.lr,
-            betas=(self.b1, self.b2),
-            weight_decay=self.weight_decay
-        )
-
+        # Train the cnn model
+        total_step = len(self.dataloader)
+        curr_lr = self.lr
         # some better optimization strategy is worthy to explore. Sometimes terrible over-fitting.
+
 
         for e in range(self.n_epochs):
             in_epoch = time.time()
             self.model.train()
-
-            if e < 5:  # 前5个epoch使用更低的学习率
-                self.update_lr(self.optimizer, self.lr * 0.1)
-            else:
-                self.update_lr(self.optimizer, self.lr)
-
-            if patience_counter >= patience:
-                print(f"Early stopping at epoch {e}")
-                break
-
             for i, (img, label) in enumerate(self.dataloader):
+
                 img = Variable(img.cuda().type(self.Tensor))
                 label = Variable(label.cuda().type(self.LongTensor))
-
-                # === 添加以下增强代码 ===
-                aug_img1, aug_img2 = self.augment_data(img)
-                combined_img = torch.cat([img, aug_img1, aug_img2], dim=0)
-                combined_label = torch.cat([label, label, label], dim=0)
-                # =====================
-
-                # 使用增强后的数据和标签
-                tok, outputs = self.model(combined_img)
-                loss = self.criterion_cls(outputs, combined_label)
-
+                tok, outputs = self.model(img)
+                loss = self.criterion_cls(outputs, label)
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+
+            out_epoch = time.time()
 
             if (e + 1) % 1 == 0:
                 self.model.eval()
@@ -450,8 +372,7 @@ class Trans():
                 y_pred = torch.max(Cls, 1)[1]
                 acc = float((y_pred == test_label).cpu().numpy().astype(int).sum()) / float(test_label.size(0))
                 train_pred = torch.max(outputs, 1)[1]
-                train_acc = float((train_pred == combined_label).cpu().numpy().astype(int).sum()) / float(
-                    combined_label.size(0))
+                train_acc = float((train_pred == label).cpu().numpy().astype(int).sum()) / float(label.size(0))
                 print('Epoch:', e,
                       '  Train loss:', loss.detach().cpu().numpy(),
                       '  Test loss:', loss_test.detach().cpu().numpy(),
@@ -462,31 +383,11 @@ class Trans():
                 averAcc = averAcc + acc
                 if acc > bestAcc:
                     bestAcc = acc
-                    # 保存当前最佳模型状态
-                    best_model_state = copy.deepcopy(self.model.module.state_dict())
                     Y_true = test_label
                     Y_pred = y_pred
-
-                # 每个epoch后在验证集上评估
-                with torch.no_grad():
-                    self.model.eval()
-                    Tok, Cls = self.model(test_data)
-                    val_loss = self.criterion_cls(Cls, test_label)
-
-                    # 更新最佳模型
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        patience_counter = 0
-                        best_model_state = copy.deepcopy(self.model.module.state_dict())
-                    else:
-                        patience_counter += 1
-
-
-        if best_model_state is not None:
-            self.save_model(best_model_state, bestAcc, target_mean, target_std, Wb)
-        else:
-            # 如果没有达到更好的准确率，保存最终模型
-            self.save_model(self.model.module.state_dict(), bestAcc, target_mean, target_std, Wb)
+            if(acc > 0.6):
+                break
+        torch.save(self.model.module.state_dict(), f'model_{timestamp}_{bestAcc}_{averAcc}.pth')
         averAcc = averAcc / num
         print('The average accuracy is:', averAcc)
         print('The best accuracy is:', bestAcc)
@@ -510,11 +411,7 @@ def main():
     torch.cuda.manual_seed_all(seed_n)
     #print('Subject %d' % (i+1))
     #trans = Trans(i + 1)
-
-
-
-
-    trans = Trans(pretrained_path='20250717_104427_0.6923/model.pth')
+    trans = Trans()
     bestAcc, averAcc, Y_true, Y_pred = trans.train()
     print('THE BEST ACCURACY IS ' + str(bestAcc))
     result_write.write('Subject ' + 'Seed is: ' + str(seed_n) + "\n")
@@ -534,10 +431,6 @@ def main():
     result_write.write('**The average Best accuracy is: ' + str(best) + "\n")
     result_write.write('The average Aver accuracy is: ' + str(aver) + "\n")
     result_write.close()
-
-
-
-
 
 
 if __name__ == "__main__":
