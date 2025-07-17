@@ -1,6 +1,6 @@
 # FC Portugal Codebase <br> for RoboCup 3D Soccer Simulation League
 
-![](https://github.com/LYZ2024/pictures/blob/main/myplot.png)
+![](https://github.com/fangsenmiao/xbci-2025/blob/main/classifier/images/introvideo.mp4)
 
 ## About
 
