@@ -27,12 +27,13 @@ from einops.layers.torch import Rearrange, Reduce
 from common_spatial_pattern import csp  # 导入CSP空间滤波器实现
 from npy_folder_loader import loadnpyfolder
 from datetime import datetime
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # 设置CUDA环境变量
 gpus = [0]
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, gpus))
+
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 class PatchEmbedding(nn.Module):
     """将EEG信号转换为嵌入向量 - 适配8通道数据"""
@@ -329,23 +330,24 @@ class Trans():
         return aug_data, aug_label
 
     def save_model(self, best_model_state, bestAcc, target_mean, target_std, Wb):
-        """保存模型和预处理参数"""
-        # 创建格式为 时间戳_准确率 的文件夹
+        """保存模型和预处理参数到同一文件"""
         folder_name = f"{timestamp}_{bestAcc:.4f}"
         model_dir = os.path.join('./', folder_name)
         os.makedirs(model_dir, exist_ok=True)
 
-        # 保存模型参数
+        # 创建包含模型状态和预处理参数的字典
+        checkpoint = {
+            'model_state_dict': best_model_state,
+            'preprocess_params': {
+                'target_mean': target_mean,
+                'target_std': target_std,
+                'Wb': Wb
+            }
+        }
+
+        # 保存到单一文件
         model_path = os.path.join(model_dir, "model.pth")
-        torch.save(best_model_state, model_path)
-
-        # 保存预处理参数为NPZ文件
-        preprocess_path = os.path.join(model_dir, "preprocess_params.npz")
-        np.savez(preprocess_path,
-                 target_mean=target_mean,
-                 target_std=target_std,
-                 Wb=Wb)
-
+        torch.save(checkpoint, model_path)
         print(f"模型和参数已保存至: {model_dir}")
 
     def augment_data(self, x):
@@ -430,13 +432,13 @@ class Trans():
 
                 # === 添加以下增强代码 ===
                 aug_img1, aug_img2 = self.augment_data(img)
-                combined_img = torch.cat([img, aug_img1, aug_img2], dim=0)
-                combined_label = torch.cat([label, label, label], dim=0)
+                #img = torch.cat([img, aug_img1, aug_img2], dim=0)
+                #label = torch.cat([label, label, label], dim=0)
                 # =====================
 
                 # 使用增强后的数据和标签
-                tok, outputs = self.model(combined_img)
-                loss = self.criterion_cls(outputs, combined_label)
+                tok, outputs = self.model(img)
+                loss = self.criterion_cls(outputs, label)
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -450,8 +452,8 @@ class Trans():
                 y_pred = torch.max(Cls, 1)[1]
                 acc = float((y_pred == test_label).cpu().numpy().astype(int).sum()) / float(test_label.size(0))
                 train_pred = torch.max(outputs, 1)[1]
-                train_acc = float((train_pred == combined_label).cpu().numpy().astype(int).sum()) / float(
-                    combined_label.size(0))
+                train_acc = float((train_pred == label).cpu().numpy().astype(int).sum()) / float(
+                    label.size(0))
                 print('Epoch:', e,
                       '  Train loss:', loss.detach().cpu().numpy(),
                       '  Test loss:', loss_test.detach().cpu().numpy(),
